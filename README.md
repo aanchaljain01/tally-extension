@@ -1,43 +1,58 @@
-# Wingman — Chrome Extension
+# Tally — Chrome Extension
 
-Automatically track your job applications across LinkedIn, Indeed, Handshake, and any external ATS (Workday, Greenhouse, Lever, etc.)
+Automatically track your job applications directly from LinkedIn with a lightweight, real-time confirmation flow.
 
+Support for Indeed and Handshake is structured and extensible within the architecture, with ongoing development for full multi-board support.
 ---
 
 ## How It Works
 
-| Situation | What Wingman Does |
-|-----------|------------------|
-| LinkedIn Easy Apply | Auto-detects success confirmation → silent toast notification, no interaction needed |
-| External redirect (Workday, company site, etc.) | Shows a Yes/No popup on the new tab asking "Did you submit?" |
-| ATS confirmation pages (`/confirmation`, `/thank-you`, etc.) | Auto-detects success URL and confirms silently |
+| Situation                                    | What Tally Does                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------- |
+| LinkedIn Easy Apply                          | Detects the Apply click → shows confirmation popup → logs as `auto` |
+| External Apply (company site, Workday, etc.) | Detects Apply click → shows confirmation popup → logs as `manual`   |
+| Duplicate application (within 7 days)        | Prevents duplicate logging and preserves data integrity             |
+
 
 ---
+# Flow Overview
 
+User clicks an Apply button
+Tally detects the interaction via content script
+A lightweight confirmation popup appears
+If confirmed:
+
+Easy Apply → saved as auto
+
+External Apply → saved as manual
+
+Application is stored in chrome.storage.local
+
+Badge and dashboard update in real time
+
+-----
 ## Installation (Chrome)
 
-1. Download and unzip `wingman.zip`
+1. Download and unzip `tally.zip`
 2. Open Chrome and go to `chrome://extensions/`
 3. Enable **Developer Mode** (toggle in top-right corner)
 4. Click **"Load unpacked"**
-5. Select the `wingman` folder
-6. The Wingman icon will appear in your toolbar ✅
+5. Select the `tally` folder
+6. The Tally icon will appear in your toolbar ✅
 
 ---
 
 ## Features
 
-- **Auto-detection** for LinkedIn Easy Apply — zero interaction needed
-- **Smart Yes/No popup** only appears for external site redirects
-- **ATS pattern matching** — recognizes Workday, Greenhouse, Lever, iCIMS confirmation pages
-- **Duplicate detection** — warns if you apply to the same role twice within 7 days
-- **Pending queue** — if you close the popup without answering, it's saved for later
-- **Dashboard** — view all applications with company, role, date, source, and type
-- **Stats bar** — today / this week / all time counts
-- **Search** — filter your application list instantly
-- **Export CSV** — download your full application history
-- **Badge counter** — green = today's count, orange = unconfirmed pending items
-
+- **Apply detection** for LinkedIn — detects Apply button interactions in real time  
+- **Unified Yes/No confirmation popup** — lightweight confirmation before logging  
+- **Automatic classification** — logs as `auto` for Easy Apply and `manual` for external applications  
+- **Duplicate detection** — prevents logging the same role within a 7-day window  
+- **Application dashboard** — view all applications with company, role, date, source, and type  
+- **Stats bar** — today / this week / all-time counts  
+- **Search** — instantly filter your application history  
+- **Export CSV** — download your full application log  
+- **Badge counter** — displays today's application count directly on the extension icon  
 ---
 
 ## File Structure
@@ -63,15 +78,7 @@ wingman/
 
 ---
 
-## Extending to New Job Boards
 
-To add a new job board (e.g. Glassdoor):
-
-1. Create `src/content-glassdoor.js` following the pattern in `content-indeed.js`
-2. Add the domain to `manifest.json` under both `host_permissions` and `content_scripts`
-3. Scrape the role/company with the board's specific DOM selectors
-
----
 
 ## Storage
 
@@ -91,4 +98,4 @@ LinkedIn occasionally updates their DOM. Open DevTools on a LinkedIn job page an
 Make sure the extension has permission for that domain. If it's a rarely-visited TLD, the content script may not inject. The job will fall into the pending queue — check the Pending tab in the popup.
 
 **Badge not updating?**
-Go to `chrome://extensions/`, find Wingman, and click the reload button.
+Go to `chrome://extensions/`, find Tally, and click the reload button.
