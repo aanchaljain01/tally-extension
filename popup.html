@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tally</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo">Tal<span>ly</span></div>
+    <div class="header-right">
+      <button class="icon-btn" id="btn-export" title="Export CSV">⬇</button>
+      <button class="icon-btn danger" id="btn-clear" title="Clear all data">🗑</button>
+    </div>
+  </div>
+
+  <!-- Stats Bar -->
+  <div class="stats-bar">
+    <div class="stat">
+      <div class="stat-num" id="stat-today">0</div>
+      <div class="stat-lbl">TODAY</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <div class="stat-num" id="stat-week">0</div>
+      <div class="stat-lbl">THIS WEEK</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <div class="stat-num" id="stat-total">0</div>
+      <div class="stat-lbl">ALL TIME</div>
+    </div>
+  </div>
+
+  <!-- Pending Banner -->
+  <div id="pending-banner" class="pending-banner hidden">
+    <div class="pending-banner-inner">
+      <span class="pending-icon">⚠️</span>
+      <span id="pending-count-text">2 unconfirmed applications</span>
+      <button id="btn-view-pending" class="pending-action">Review</button>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" data-tab="applications">Applications</button>
+    <button class="tab" data-tab="pending">Pending <span id="pending-badge" class="badge hidden">0</span></button>
+  </div>
+
+  <!-- Applications Tab -->
+  <div id="tab-applications" class="tab-content">
+    <div class="search-row">
+      <input type="text" id="search-input" placeholder="Search company or role..." class="search-input">
+    </div>
+    <div id="applications-list" class="app-list">
+      <!-- Populated by JS -->
+    </div>
+    <div id="empty-state" class="empty-state hidden">
+      <div class="empty-icon">📋</div>
+      <div class="empty-text">No applications yet</div>
+      <div class="empty-sub">Start applying on LinkedIn, Indeed, or Handshake</div>
+    </div>
+  </div>
+
+  <!-- Pending Tab -->
+  <div id="tab-pending" class="tab-content hidden">
+    <div id="pending-list" class="app-list">
+      <!-- Populated by JS -->
+    </div>
+    <div id="pending-empty" class="empty-state hidden">
+      <div class="empty-icon">✅</div>
+      <div class="empty-text">All caught up!</div>
+      <div class="empty-sub">No unconfirmed applications</div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
