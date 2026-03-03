@@ -11,11 +11,9 @@ const JOB_BOARD_ORIGINS = [
   'app.joinhandshake.com'
 ];
 
-
-const pendingExternalJobs = new Map(); 
-const confirmCooldownByOpener = new Map(); 
 const CONFIRM_COOLDOWN_MS = 8000;
-// ── Utility ─────────────────────────────────
+
+// ── Utility ──────────────────────────────────
 
 function isJobBoard(url) {
   if (!url) return false;
@@ -39,7 +37,7 @@ async function setStorage(key, value) {
   });
 }
 
-// ── Badge ────────────────────────────────────
+// ── Badge ─────────────────────────────────────
 
 async function updateBadge() {
   const apps = (await getStorage('applications')) || [];
@@ -58,9 +56,15 @@ async function updateBadge() {
   }
 }
 
-// ── Save Application ─────────────────────────
+// ── Save Application ──────────────────────────
 
 async function saveApplication(jobData) {
+  // Guard: don't save if both company and role are empty/unknown
+  if ((!jobData.company || jobData.company === 'Unknown Company') &&
+      (!jobData.role || jobData.role === 'Unknown Role')) {
+    return { success: false, reason: 'no data' };
+  }
+
   const apps = (await getStorage('applications')) || [];
 
   // Duplicate check: same company + role within last 7 days
@@ -81,7 +85,7 @@ async function saveApplication(jobData) {
     role: jobData.role || 'Unknown Role',
     date: new Date().toISOString(),
     source: jobData.source || 'unknown',
-    type: jobData.type || 'manual', // 'auto' | 'manual'
+    type: jobData.type || 'manual',
     url: jobData.url || '',
     logo: jobData.logo || ''
   };
@@ -92,7 +96,7 @@ async function saveApplication(jobData) {
   return { success: true, entry };
 }
 
-// ── Pending Queue ────────────────────────────
+// ── Pending Queue ─────────────────────────────
 
 async function addToPending(jobData) {
   const pending = (await getStorage('pending')) || [];
@@ -119,44 +123,85 @@ async function resolveFromPending(pendingId, confirmed) {
   await updateBadge();
 }
 
-// ── Tab Tracking — External Redirect ────────
+// ── Tab Tracking — External Redirect ──────────
+// FIX: Save pendingByOpener to storage instead of memory Map
+// so it survives service worker restarts
 
-// openerTabId -> jobData: set when content script fires EXTERNAL_APPLY_INITIATED
-const pendingByOpener = new Map();
+async function savePendingByOpener(openerTabId, jobData) {
+  const all = (await getStorage('pendingByOpener')) || {};
+  all[openerTabId] = { jobData, savedAt: Date.now() };
+  await setStorage('pendingByOpener', all);
+  // Auto-expire after 30 seconds
+  setTimeout(async () => {
+    const current = (await getStorage('pendingByOpener')) || {};
+    delete current[openerTabId];
+    await setStorage('pendingByOpener', current);
+  }, 30000);
+}
+
+async function getPendingByOpener(openerTabId) {
+  const all = (await getStorage('pendingByOpener')) || {};
+  return all[openerTabId]?.jobData || null;
+}
+
+async function deletePendingByOpener(openerTabId) {
+  const all = (await getStorage('pendingByOpener')) || {};
+  delete all[openerTabId];
+  await setStorage('pendingByOpener', all);
+}
+
+// FIX: Save pendingExternalJobs to storage instead of memory Map
+async function savePendingExternalJob(tabId, jobData, openerTabId) {
+  const all = (await getStorage('pendingExternalJobs')) || {};
+  all[tabId] = { jobData, openerTabId, savedAt: Date.now() };
+  await setStorage('pendingExternalJobs', all);
+}
+
+async function getPendingExternalJob(tabId) {
+  const all = (await getStorage('pendingExternalJobs')) || {};
+  return all[tabId] || null;
+}
+
+async function deletePendingExternalJob(tabId) {
+  const all = (await getStorage('pendingExternalJobs')) || {};
+  delete all[tabId];
+  await setStorage('pendingExternalJobs', all);
+}
 
 // When a new tab is created, check if its opener has a pending job
 chrome.tabs.onCreated.addListener(async (tab) => {
   console.log('[Tally] Tab created — id:', tab.id, 'openerTabId:', tab.openerTabId);
 
   if (!tab.openerTabId) return;
-  if (!pendingByOpener.has(tab.openerTabId)) return;
 
-  const jobData = pendingByOpener.get(tab.openerTabId);
-  pendingByOpener.delete(tab.openerTabId);
+  const jobData = await getPendingByOpener(tab.openerTabId);
+  if (!jobData) return;
 
-  // Store both jobData AND openerTabId so we can send popup back to LinkedIn tab
-  pendingExternalJobs.set(tab.id, { jobData, openerTabId: tab.openerTabId });
+  await deletePendingByOpener(tab.openerTabId);
+  await savePendingExternalJob(tab.id, jobData, tab.openerTabId);
+
   console.log('[Tally] ✓ Mapped job to new tab:', tab.id, '| will send popup back to:', tab.openerTabId);
-
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
   if (!tab.url) return;
-
   if (isJobBoard(tab.url)) return;
-  if (!pendingExternalJobs.has(tabId)) return;
 
-  const { jobData, openerTabId } = pendingExternalJobs.get(tabId);
+  const pending = await getPendingExternalJob(tabId);
+  if (!pending) return;
 
-  
-  pendingExternalJobs.delete(tabId);
+  const { jobData, openerTabId } = pending;
+  await deletePendingExternalJob(tabId);
 
-  
+  // Cooldown check — stored in storage too so it survives SW restart
+  const cooldowns = (await getStorage('confirmCooldowns')) || {};
   const now = Date.now();
-  const last = confirmCooldownByOpener.get(openerTabId) || 0;
+  const last = cooldowns[openerTabId] || 0;
   if (now - last < CONFIRM_COOLDOWN_MS) return;
-  confirmCooldownByOpener.set(openerTabId, now);
+
+  cooldowns[openerTabId] = now;
+  await setStorage('confirmCooldowns', cooldowns);
 
   setTimeout(() => {
     chrome.tabs.sendMessage(openerTabId, {
@@ -167,48 +212,48 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     });
   }, 1500);
 });
-chrome.tabs.onRemoved.addListener((tabId) => {
-  pendingExternalJobs.delete(tabId);
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await deletePendingExternalJob(tabId);
+  // Clean up cooldowns for removed tabs
+  const cooldowns = (await getStorage('confirmCooldowns')) || {};
+  delete cooldowns[tabId];
+  await setStorage('confirmCooldowns', cooldowns);
 });
 
-// ── Message Handler ──────────────────────────
+// ── Message Handler ───────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender, sendResponse);
-  return true; // keep channel open for async
+  return true;
 });
 
 async function handleMessage(message, sender, sendResponse) {
   switch (message.type) {
 
-    // Content script found a job listing and user is about to apply externally
     case 'EXTERNAL_APPLY_INITIATED': {
       const { jobData } = message;
       const openerTabId = sender.tab?.id;
 
-      console.log('[Tally] EXTERNAL_APPLY_INITIATED received — openerTabId:', openerTabId, 'job:', jobData?.company, jobData?.role);
+      console.log('[Tally] EXTERNAL_APPLY_INITIATED — openerTabId:', openerTabId, 'job:', jobData?.company, jobData?.role);
 
       if (openerTabId) {
-        pendingByOpener.set(openerTabId, { ...jobData, type: 'manual' });
-        console.log('[Tally] Stored in pendingByOpener for tab:', openerTabId);
-        setTimeout(() => pendingByOpener.delete(openerTabId), 30000);
+        // FIX: Save to storage instead of memory Map
+        await savePendingByOpener(openerTabId, { ...jobData, type: 'manual' });
+        console.log('[Tally] Saved to storage for tab:', openerTabId);
       } else {
-        console.warn('[Tally] No openerTabId — adding to pending queue');
         await addToPending(jobData);
       }
       sendResponse({ ok: true });
       break;
     }
 
-    // Easy Apply auto-detected success
     case 'AUTO_APPLY_SUCCESS': {
       const result = await saveApplication({ ...message.jobData, type: 'auto' });
       if (sender.tab?.id) {
-        // Compute today's count after saving
         const apps = (await getStorage('applications')) || [];
         const today = new Date().toDateString();
         const todayCount = apps.filter(a => new Date(a.date).toDateString() === today).length;
-
         chrome.tabs.sendMessage(sender.tab.id, {
           type: 'SHOW_AUTO_TOAST',
           jobData: message.jobData,
@@ -220,14 +265,12 @@ async function handleMessage(message, sender, sendResponse) {
       break;
     }
 
-    // User confirmed or denied an external application
     case 'EXTERNAL_CONFIRM_RESPONSE': {
       const { confirmed, jobData, pendingId } = message;
       if (pendingId) {
         await resolveFromPending(pendingId, confirmed);
       } else if (confirmed) {
         const result = await saveApplication({ ...jobData, type: 'manual' });
-        // Compute todayCount and send back for toast
         const apps = (await getStorage('applications')) || [];
         const today = new Date().toDateString();
         const todayCount = apps.filter(a => new Date(a.date).toDateString() === today).length;
@@ -235,13 +278,12 @@ async function handleMessage(message, sender, sendResponse) {
         return;
       }
       if (sender.tab?.id) {
-        pendingExternalJobs.delete(sender.tab.id);
+        await deletePendingExternalJob(sender.tab.id);
       }
       sendResponse({ ok: true });
       break;
     }
 
-    // Popup requests all data
     case 'GET_ALL_DATA': {
       const applications = (await getStorage('applications')) || [];
       const pending = (await getStorage('pending')) || [];
@@ -249,7 +291,6 @@ async function handleMessage(message, sender, sendResponse) {
       break;
     }
 
-    // Popup requests stats
     case 'GET_STATS': {
       const applications = (await getStorage('applications')) || [];
       const today = new Date().toDateString();
@@ -264,7 +305,6 @@ async function handleMessage(message, sender, sendResponse) {
       break;
     }
 
-    // Delete a single application
     case 'DELETE_APPLICATION': {
       const apps = (await getStorage('applications')) || [];
       const filtered = apps.filter(a => a.id !== message.id);
@@ -274,14 +314,12 @@ async function handleMessage(message, sender, sendResponse) {
       break;
     }
 
-    // Resolve a pending item from popup
     case 'RESOLVE_PENDING': {
       await resolveFromPending(message.pendingId, message.confirmed);
       sendResponse({ ok: true });
       break;
     }
 
-    // Clear all data
     case 'CLEAR_ALL': {
       await setStorage('applications', []);
       await setStorage('pending', []);
@@ -290,15 +328,10 @@ async function handleMessage(message, sender, sendResponse) {
       break;
     }
 
-    // External content script asks if there's a pending job for this tab
     case 'GET_PENDING_FOR_TAB': {
       const tabId = sender.tab?.id;
-      if (tabId && pendingExternalJobs.has(tabId)) {
-        const jobData = pendingExternalJobs.get(tabId);
-        sendResponse({ jobData });
-      } else {
-        sendResponse({ jobData: null });
-      }
+      const pending = tabId ? await getPendingExternalJob(tabId) : null;
+      sendResponse({ jobData: pending?.jobData || null });
       break;
     }
 
@@ -307,7 +340,5 @@ async function handleMessage(message, sender, sendResponse) {
   }
 }
 
-
 // Init badge on startup
 updateBadge();
-
