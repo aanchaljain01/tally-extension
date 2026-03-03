@@ -309,26 +309,6 @@ async function handleMessage(message, sender, sendResponse) {
 }
 
 
-
-chrome.runtime.onInstalled.addListener(() => {
-  injectIntoLinkedInTabs();
-});
-
-chrome.runtime.onStartup.addListener(() => {
-  injectIntoLinkedInTabs();
-});
-
-function injectIntoLinkedInTabs() {
-  chrome.tabs.query({ url: ['https://www.linkedin.com/*', 'https://linkedin.com/*'] }, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['src/content-shared.js', 'src/content-linkedin.js']
-      }).catch(() => {});
-    });
-  });
-}
-
 // Init badge on startup
 updateBadge();
 
