@@ -47,7 +47,7 @@
   if (popupShowing || document.getElementById('tally-confirm')) return;
   popupShowing = true;
 
-  // (keep the rest of your function)
+
 
     const job = currentJob || {};
 

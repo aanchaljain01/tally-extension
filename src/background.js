@@ -11,10 +11,9 @@ const JOB_BOARD_ORIGINS = [
   'app.joinhandshake.com'
 ];
 
-// Track which tab originally had the job listing
-// so we can pass context to external redirect tabs
-const pendingExternalJobs = new Map(); // tabId -> jobData
-const confirmCooldownByOpener = new Map(); // openerTabId -> timestamp
+
+const pendingExternalJobs = new Map(); 
+const confirmCooldownByOpener = new Map(); 
 const CONFIRM_COOLDOWN_MS = 8000;
 // ── Utility ─────────────────────────────────
 
@@ -122,7 +121,7 @@ async function resolveFromPending(pendingId, confirmed) {
 
 // ── Tab Tracking — External Redirect ────────
 
-// openerTabId -> jobData: set when content script fires EXTERNAL_APPLY_INITIATED
+
 const pendingByOpener = new Map();
 
 // When a new tab is created, check if its opener has a pending job
