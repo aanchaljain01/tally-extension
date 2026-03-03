@@ -121,7 +121,7 @@ async function resolveFromPending(pendingId, confirmed) {
 
 // ── Tab Tracking — External Redirect ────────
 
-
+// openerTabId -> jobData: set when content script fires EXTERNAL_APPLY_INITIATED
 const pendingByOpener = new Map();
 
 // When a new tab is created, check if its opener has a pending job
