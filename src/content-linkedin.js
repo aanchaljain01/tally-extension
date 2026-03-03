@@ -7,17 +7,61 @@
   'use strict';
   if (window.__tally_loaded) return;
   window.__tally_loaded = true;
+
   let currentJob = null;
   let popupShowing = false;
   let lastPopupAt = 0;
   const POPUP_COOLDOWN_MS = 8000;
   let applyTimeout = null;
   let applyMode = null; // 'easy' or 'external'
-  console.log('[Tally] LinkedIn script loaded ✓');
-  //window.__tally_loaded = true;
 
-  // ── Fetch job details from LinkedIn API ────
-  // Called as soon as a job listing is selected (URL changes)
+  console.log('[Tally] LinkedIn script loaded ✓');
+
+  // ── Scrape job details directly from the DOM ────
+
+  function scrapeFromDOM() {
+    const roleSelectors = [
+      '.job-details-jobs-unified-top-card__job-title h1',
+      '.jobs-unified-top-card__job-title h1',
+      '.job-details-jobs-unified-top-card__job-title',
+      '.jobs-unified-top-card__job-title',
+      'h1.t-24',
+      'h1[class*="job-title"]',
+      'h1'
+    ];
+
+    const companySelectors = [
+      '.job-details-jobs-unified-top-card__company-name a',
+      '.job-details-jobs-unified-top-card__company-name',
+      '.jobs-unified-top-card__company-name a',
+      '.jobs-unified-top-card__company-name',
+      '.topcard__org-name-link',
+      'a[href*="/company/"]'
+    ];
+
+    let role = '';
+    let company = '';
+
+    for (const sel of roleSelectors) {
+      const el = document.querySelector(sel);
+      if (el?.textContent?.trim()) {
+        role = el.textContent.trim().replace(/\s+/g, ' ');
+        break;
+      }
+    }
+
+    for (const sel of companySelectors) {
+      const el = document.querySelector(sel);
+      if (el?.textContent?.trim()) {
+        company = el.textContent.trim().replace(/\s+/g, ' ');
+        break;
+      }
+    }
+
+    return { role, company };
+  }
+
+  // ── Fetch job details from LinkedIn guest API ────
 
   function fetchJobDetails() {
     const jobId = new URL(location.href).searchParams.get('currentJobId');
@@ -25,29 +69,70 @@
 
     currentJob = { company: '', role: '', url: location.href, source: 'LinkedIn' };
 
+    // First scrape from DOM immediately
+    const dom = scrapeFromDOM();
+    if (dom.role)    currentJob.role    = dom.role;
+    if (dom.company) currentJob.company = dom.company;
+    console.log('[Tally] DOM scrape:', currentJob.role, 'at', currentJob.company);
+
+    // Then try guest API as backup
     fetch(`https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${jobId}`)
       .then(r => r.text())
       .then(html => {
-        const roleMatch    = html.match(/class="[^"]*topcard__title[^"]*"[^>]*>([^<]+)/);
-        const companyMatch = html.match(/topcard__org-name-link[^>]*>\s*([^<]+)/);
-        if (roleMatch?.[1])    currentJob.role    = roleMatch[1].trim();
-        if (companyMatch?.[1]) currentJob.company = companyMatch[1].trim();
+        const rolePatterns = [
+          /<h1[^>]*class="t-24 t-bold inline"[^>]*>(?:<a[^>]*>)?([^<]+)/,
+          /class="[^"]*topcard__title[^"]*"[^>]*>([^<]+)/,
+          /job-details-jobs-unified-top-card__job-title[\s\S]*?<h1[^>]*>([^<]+)/,
+          /"jobTitle"\s*:\s*"([^"]+)"/
+        ];
+
+        const companyPatterns = [
+          /href="https:\/\/www\.linkedin\.com\/company\/[^"]*"[^>]*>\s*([^<<!--]+)/,
+          /topcard__org-name-link[^>]*>\s*([^<]+)/,
+          /"companyName"\s*:\s*"([^"]+)"/
+        ];
+
+        for (const pattern of rolePatterns) {
+          const match = html.match(pattern);
+          if (match?.[1]?.trim()) { currentJob.role = match[1].trim(); break; }
+        }
+
+        for (const pattern of companyPatterns) {
+          const match = html.match(pattern);
+          if (match?.[1]?.trim()) { currentJob.company = match[1].trim(); break; }
+        }
+
+        // Keep DOM values if API returned nothing
+        if (!currentJob.role)    currentJob.role    = dom.role    || 'Unknown Role';
+        if (!currentJob.company) currentJob.company = dom.company || 'Unknown Company';
+
         console.log('[Tally] Job ready:', currentJob.role, 'at', currentJob.company);
       })
-      .catch(() => {});
+      .catch(() => {
+        currentJob.role    = dom.role    || 'Unknown Role';
+        currentJob.company = dom.company || 'Unknown Company';
+        console.log('[Tally] API failed, using DOM:', currentJob.role, 'at', currentJob.company);
+      });
   }
 
   // ── Show Yes/No popup ──────────────────────
 
   function showConfirmPopup() {
-  const now = Date.now();
-  if (now - lastPopupAt < POPUP_COOLDOWN_MS) return;
-  lastPopupAt = now;
+    const now = Date.now();
+    if (now - lastPopupAt < POPUP_COOLDOWN_MS) return;
+    lastPopupAt = now;
 
-  if (popupShowing || document.getElementById('tally-confirm')) return;
-  popupShowing = true;
+    if (popupShowing || document.getElementById('tally-confirm')) return;
+    popupShowing = true;
 
-
+    // Re-scrape from DOM at popup time in case fetch hasn't resolved yet
+    if (!currentJob?.role || !currentJob?.company ||
+        currentJob.role === '' || currentJob.company === '') {
+      const dom = scrapeFromDOM();
+      if (!currentJob) currentJob = { url: location.href, source: 'LinkedIn' };
+      if (dom.role)    currentJob.role    = dom.role;
+      if (dom.company) currentJob.company = dom.company;
+    }
 
     const job = currentJob || {};
 
@@ -66,11 +151,8 @@
 
     injectStyles(`
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap');
-
       #tally-confirm {
-        position: fixed;
-        top: 24px;
-        right: 24px;
+        position: fixed; top: 24px; right: 24px;
         z-index: 2147483647;
         font-family: 'Inter', -apple-system, sans-serif;
         animation: tally-in 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards;
@@ -80,24 +162,15 @@
         to   { transform: translateY(0) scale(1); opacity: 1; }
       }
       .tally-card {
-        width: 340px;
-        background: #0a0a0a;
+        width: 340px; background: #0a0a0a;
         border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 20px;
-        padding: 22px 22px 18px;
+        border-radius: 20px; padding: 22px 22px 18px;
         box-shadow: 0 32px 80px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.06);
         text-align: center;
       }
-      .tally-header {
-        display: flex; justify-content: space-between; align-items: center;
-        margin-bottom: 14px;
-      }
-      .tally-logo {
-        font-weight: 900; font-size: 1.2rem; color: #fff; letter-spacing: -0.03em;
-      }
-      .tally-logo span {
-        color: #a0a0a0;
-      }
+      .tally-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+      .tally-logo { font-weight: 900; font-size: 1.2rem; color: #fff; letter-spacing: -0.03em; }
+      .tally-logo span { color: #a0a0a0; }
       .tally-badge {
         font-size: 0.72rem; font-weight: 700;
         background: rgba(255,255,255,0.06); color: #888;
@@ -105,38 +178,22 @@
         padding: 4px 10px; border-radius: 20px; letter-spacing: 0.04em;
       }
       .tally-emoji { font-size: 2.4rem; margin-bottom: 8px; }
-      .tally-question {
-        font-size: 1.5rem; font-weight: 800; color: #fff; letter-spacing: -0.03em;
-        margin-bottom: 14px; letter-spacing: -0.02em;
-      }
+      .tally-question { font-size: 1.5rem; font-weight: 800; color: #fff; letter-spacing: -0.02em; margin-bottom: 14px; }
       .tally-job-block {
-        background: #141414;
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 12px; padding: 14px 16px;
-        margin-bottom: 16px; text-align: left;
+        background: #141414; border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; text-align: left;
       }
       .tally-company { font-size: 1.1rem; font-weight: 800; color: #fff; letter-spacing: -0.02em; }
-      .tally-role    { font-size: 0.88rem; color: #888; margin-top: 4px; font-weight: 500; }
-      .tally-btns    { display: flex; gap: 8px; }
+      .tally-role { font-size: 0.88rem; color: #888; margin-top: 4px; font-weight: 500; }
+      .tally-btns { display: flex; gap: 8px; }
       .tally-btns button {
         flex: 1; padding: 14px 8px; border-radius: 12px;
         font-family: inherit; font-size: 1rem; font-weight: 800;
         cursor: pointer; border: none; transition: all 0.15s;
       }
-      #tally-yes {
-        background: #fff;
-        color: #000;
-        box-shadow: 0 4px 20px rgba(255,255,255,0.12);
-      }
-      #tally-yes:hover {
-        transform: translateY(-1px);
-        background: #f0f0f0;
-        box-shadow: 0 6px 24px rgba(255,255,255,0.18);
-      }
-      #tally-no {
-        background: #141414; color: #666;
-        border: 1px solid rgba(255,255,255,0.08) !important;
-      }
+      #tally-yes { background: #fff; color: #000; box-shadow: 0 4px 20px rgba(255,255,255,0.12); }
+      #tally-yes:hover { transform: translateY(-1px); background: #f0f0f0; }
+      #tally-no { background: #141414; color: #666; border: 1px solid rgba(255,255,255,0.08) !important; }
       #tally-no:hover { background: #1c1c1c; color: #999; border-color: rgba(255,255,255,0.15) !important; }
     `, 'tally-styles');
 
@@ -163,47 +220,44 @@
     document.body.appendChild(el);
 
     document.getElementById('tally-yes').onclick = () => {
-  el.remove();
-  popupShowing = false;
+      el.remove();
+      popupShowing = false;
 
-  const finalJob = {
-    company: currentJob?.company || 'Unknown Company',
-    role:    currentJob?.role    || 'Unknown Role',
-    url:     location.href,
-    source:  'LinkedIn'
-  };
+      const finalJob = {
+        company: currentJob?.company || 'Unknown Company',
+        role:    currentJob?.role    || 'Unknown Role',
+        url:     location.href,
+        source:  'LinkedIn'
+      };
 
-  console.log('[Tally] Saving:', finalJob.company, finalJob.role, 'Mode:', applyMode);
+      console.log('[Tally] Saving:', finalJob.company, finalJob.role, 'Mode:', applyMode);
 
-  if (applyMode === 'easy') {
-    // ✅ Easy Apply → save as AUTO
-    chrome.runtime.sendMessage(
-      { type: 'AUTO_APPLY_SUCCESS', jobData: finalJob },
-      () => {
-        chrome.runtime.sendMessage({ type: 'GET_STATS' }, (stats) => {
-          showYay(finalJob, stats?.today);
-        });
+      if (applyMode === 'easy') {
+        chrome.runtime.sendMessage(
+          { type: 'AUTO_APPLY_SUCCESS', jobData: finalJob },
+          () => {
+            chrome.runtime.sendMessage({ type: 'GET_STATS' }, (stats) => {
+              showYay(finalJob, stats?.today);
+            });
+          }
+        );
+      } else {
+        chrome.runtime.sendMessage(
+          { type: 'EXTERNAL_CONFIRM_RESPONSE', confirmed: true, jobData: finalJob },
+          (res) => { showYay(finalJob, res?.todayCount); }
+        );
       }
-    );
-  } else {
-    // ✅ External Apply → save as MANUAL
-    chrome.runtime.sendMessage(
-      { type: 'EXTERNAL_CONFIRM_RESPONSE', confirmed: true, jobData: finalJob },
-      (res) => {
-        showYay(finalJob, res?.todayCount);
-      }
-    );
+
+      applyMode = null;
+    };
+
+    document.getElementById('tally-no').onclick = () => {
+      el.remove();
+      popupShowing = false;
+      applyMode = null;
+    };
   }
 
-  applyMode = null; // reset after save
-};
-
-document.getElementById('tally-no').onclick = () => {
-  el.remove();
-  popupShowing = false;
-  applyMode = null;
-};
-}
   // ── Toast ──────────────────────────────────
 
   function showYay(job, todayCount) {
@@ -211,7 +265,7 @@ document.getElementById('tally-no').onclick = () => {
     if (existing) existing.remove();
 
     const count = todayCount || 1;
-    const msgs = [`That's 1 today! 🎯`,`That's 2 today! 🔥`,`That's 3 today! 🚀`,`That's 4 today! 💪`,`That's 5 today! 🎯`,`That's ${count} today! 🏆`];
+    const msgs = [`That's 1 today! 🎯`, `That's 2 today! 🔥`, `That's 3 today! 🚀`, `That's 4 today! 💪`, `That's 5 today! 🎯`, `That's ${count} today! 🏆`];
     const msg = msgs[Math.min(count - 1, msgs.length - 1)];
 
     const el = document.createElement('div');
@@ -240,31 +294,32 @@ document.getElementById('tally-no').onclick = () => {
   }
 
   // ── Detect any apply button click ─────────
+  // Fixed: handles clicks on span/svg inside buttons using artdeco-button selector
 
-document.addEventListener('click', (e) => {
-  const btn = e.target.closest('button, a');
-  if (!btn) return;
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('button, a, [class*="artdeco-button"]');
+    if (!btn) return;
 
-  const text = btn.textContent?.trim().toLowerCase() || '';
-  const aria = btn.getAttribute?.('aria-label')?.toLowerCase() || '';
+    const text = btn.textContent?.trim().toLowerCase() || '';
+    const aria = btn.getAttribute?.('aria-label')?.toLowerCase() || '';
 
-  if (!text.includes('apply') && !aria.includes('apply')) return;
+    if (!text.includes('apply') && !aria.includes('apply')) return;
 
-  console.log('[Tally] Apply click detected');
+    console.log('[Tally] Apply click detected');
 
-  clearTimeout(applyTimeout);
-  applyTimeout = null;
+    clearTimeout(applyTimeout);
+    applyTimeout = null;
 
-  const isEasyApply = text.includes('easy apply') || aria.includes('easy apply');
+    const isEasyApply = text.includes('easy apply') || aria.includes('easy apply');
+    applyMode = isEasyApply ? 'easy' : 'external';
 
-  applyMode = isEasyApply ? 'easy' : 'external';
+    const thisTimeout = setTimeout(() => {
+      if (applyTimeout === thisTimeout && !popupShowing) showConfirmPopup();
+    }, 3000);
 
-  const thisTimeout = setTimeout(() => {
-    if (applyTimeout === thisTimeout && !popupShowing) showConfirmPopup();
-  }, 3000);
+    applyTimeout = thisTimeout;
+  });
 
-  applyTimeout = thisTimeout;
-});
   // ── Watch for job ID changes in URL ────────
 
   let lastJobId = new URL(location.href).searchParams.get('currentJobId');
@@ -282,22 +337,10 @@ document.addEventListener('click', (e) => {
   // ── Messages from background ──────────────
 
   chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'SHOW_EXTERNAL_CONFIRM') {
-    // cancel the 3s fallback so the popup can't show twice
-    //clearTimeout(applyTimeout);
-    //applyTimeout = null;
-
-    // hard guard against duplicates
-    //if (!popupShowing && !document.getElementById('tally-confirm')) {
-      //showConfirmPopup();
-    //}
-    return;
-  }
-
-  if (message.type === 'SHOW_AUTO_TOAST') {
-    showYay(message.jobData, message.todayCount);
-  }
-});
+    if (message.type === 'SHOW_AUTO_TOAST') {
+      showYay(message.jobData, message.todayCount);
+    }
+  });
 
   // ── Init ──────────────────────────────────
 
@@ -305,6 +348,5 @@ document.addEventListener('click', (e) => {
     fetchJobDetails();
     console.log('[Tally] Ready');
   }, 1000);
-  
-})();
 
+})();
