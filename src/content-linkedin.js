@@ -306,6 +306,9 @@
 
     console.log('[Tally] Apply click detected');
 
+    // Reset any stuck state from previous session
+    popupShowing = false;
+    lastPopupAt = 0;
     clearTimeout(applyTimeout);
     applyTimeout = null;
 
