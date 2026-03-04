@@ -59,7 +59,7 @@ async function updateBadge() {
 // ── Save Application ──────────────────────────
 
 async function saveApplication(jobData) {
-  // Guard: don't save if both company and role are empty/unknown
+  // Guard: don't save blank data
   if ((!jobData.company || jobData.company === 'Unknown Company') &&
       (!jobData.role || jobData.role === 'Unknown Role')) {
     return { success: false, reason: 'no data' };
@@ -67,7 +67,6 @@ async function saveApplication(jobData) {
 
   const apps = (await getStorage('applications')) || [];
 
-  // Duplicate check: same company + role within last 7 days
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const duplicate = apps.find(a =>
     a.company?.toLowerCase() === jobData.company?.toLowerCase() &&
@@ -116,27 +115,25 @@ async function resolveFromPending(pendingId, confirmed) {
   pending.splice(idx, 1);
   await setStorage('pending', pending);
 
-  if (confirmed) {
-    await saveApplication({ ...job, type: 'manual' });
-  }
-
+  if (confirmed) await saveApplication({ ...job, type: 'manual' });
   await updateBadge();
 }
 
-// ── Tab Tracking — External Redirect ──────────
-// FIX: Save pendingByOpener to storage instead of memory Map
-// so it survives service worker restarts
+// ── Storage helpers for tab tracking ─────────
+// All stored in chrome.storage.local so they survive service worker restarts
 
 async function savePendingByOpener(openerTabId, jobData) {
   const all = (await getStorage('pendingByOpener')) || {};
   all[openerTabId] = { jobData, savedAt: Date.now() };
   await setStorage('pendingByOpener', all);
-  // Auto-expire after 30 seconds
+  // Auto-expire after 60 seconds
   setTimeout(async () => {
     const current = (await getStorage('pendingByOpener')) || {};
-    delete current[openerTabId];
-    await setStorage('pendingByOpener', current);
-  }, 30000);
+    if (current[openerTabId]?.savedAt === all[openerTabId]?.savedAt) {
+      delete current[openerTabId];
+      await setStorage('pendingByOpener', current);
+    }
+  }, 60000);
 }
 
 async function getPendingByOpener(openerTabId) {
@@ -150,7 +147,6 @@ async function deletePendingByOpener(openerTabId) {
   await setStorage('pendingByOpener', all);
 }
 
-// FIX: Save pendingExternalJobs to storage instead of memory Map
 async function savePendingExternalJob(tabId, jobData, openerTabId) {
   const all = (await getStorage('pendingExternalJobs')) || {};
   all[tabId] = { jobData, openerTabId, savedAt: Date.now() };
@@ -168,10 +164,10 @@ async function deletePendingExternalJob(tabId) {
   await setStorage('pendingExternalJobs', all);
 }
 
-// When a new tab is created, check if its opener has a pending job
+// ── Tab Tracking — External Redirect ─────────
+
 chrome.tabs.onCreated.addListener(async (tab) => {
   console.log('[Tally] Tab created — id:', tab.id, 'openerTabId:', tab.openerTabId);
-
   if (!tab.openerTabId) return;
 
   const jobData = await getPendingByOpener(tab.openerTabId);
@@ -179,8 +175,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 
   await deletePendingByOpener(tab.openerTabId);
   await savePendingExternalJob(tab.id, jobData, tab.openerTabId);
-
-  console.log('[Tally] ✓ Mapped job to new tab:', tab.id, '| will send popup back to:', tab.openerTabId);
+  console.log('[Tally] ✓ Mapped job to new tab:', tab.id, '| opener:', tab.openerTabId);
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
@@ -188,13 +183,29 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!tab.url) return;
   if (isJobBoard(tab.url)) return;
 
-  const pending = await getPendingExternalJob(tabId);
+  // First check pendingExternalJobs (normal flow when onCreated was caught)
+  let pending = await getPendingExternalJob(tabId);
+
+  // FIX: If not found, service worker may have been asleep and missed onCreated
+  // Use chrome.tabs.get to find the openerTabId and check storage directly
+  if (!pending) {
+    const tabInfo = await chrome.tabs.get(tabId).catch(() => null);
+    if (tabInfo?.openerTabId) {
+      const jobData = await getPendingByOpener(tabInfo.openerTabId);
+      if (jobData) {
+        console.log('[Tally] ✓ Recovered missed onCreated — found job in pendingByOpener');
+        await deletePendingByOpener(tabInfo.openerTabId);
+        pending = { jobData, openerTabId: tabInfo.openerTabId };
+      }
+    }
+  }
+
   if (!pending) return;
 
   const { jobData, openerTabId } = pending;
   await deletePendingExternalJob(tabId);
 
-  // Cooldown check — stored in storage too so it survives SW restart
+  // Cooldown check — stored in storage so it survives SW restart
   const cooldowns = (await getStorage('confirmCooldowns')) || {};
   const now = Date.now();
   const last = cooldowns[openerTabId] || 0;
@@ -215,7 +226,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   await deletePendingExternalJob(tabId);
-  // Clean up cooldowns for removed tabs
   const cooldowns = (await getStorage('confirmCooldowns')) || {};
   delete cooldowns[tabId];
   await setStorage('confirmCooldowns', cooldowns);
@@ -234,11 +244,9 @@ async function handleMessage(message, sender, sendResponse) {
     case 'EXTERNAL_APPLY_INITIATED': {
       const { jobData } = message;
       const openerTabId = sender.tab?.id;
-
       console.log('[Tally] EXTERNAL_APPLY_INITIATED — openerTabId:', openerTabId, 'job:', jobData?.company, jobData?.role);
 
       if (openerTabId) {
-        // FIX: Save to storage instead of memory Map
         await savePendingByOpener(openerTabId, { ...jobData, type: 'manual' });
         console.log('[Tally] Saved to storage for tab:', openerTabId);
       } else {
@@ -277,9 +285,7 @@ async function handleMessage(message, sender, sendResponse) {
         sendResponse({ ...result, todayCount });
         return;
       }
-      if (sender.tab?.id) {
-        await deletePendingExternalJob(sender.tab.id);
-      }
+      if (sender.tab?.id) await deletePendingExternalJob(sender.tab.id);
       sendResponse({ ok: true });
       break;
     }
@@ -297,11 +303,7 @@ async function handleMessage(message, sender, sendResponse) {
       const todayApps = applications.filter(a => new Date(a.date).toDateString() === today);
       const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
       const weekApps = applications.filter(a => new Date(a.date).getTime() > weekAgo);
-      sendResponse({
-        total: applications.length,
-        today: todayApps.length,
-        week: weekApps.length
-      });
+      sendResponse({ total: applications.length, today: todayApps.length, week: weekApps.length });
       break;
     }
 
