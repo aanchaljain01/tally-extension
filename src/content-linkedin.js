@@ -334,21 +334,8 @@
       clearTimeout(applyTimeout);
       fetchJobDetails();
     }
-  }).observe(document, { subtree: true, childList: true });
-
-  // ── Reinitialise when tab wakes up from sleep ──
-  // FIX: Chrome freezes inactive tabs overnight, killing the script state.
-  // visibilitychange fires when you switch back to the tab, so we
-  // reinitialise currentJob so Apply click works immediately.
-
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      console.log('[Tally] Tab woke up — reinitialising job details');
-      popupShowing = false;
-      clearTimeout(applyTimeout);
-      applyTimeout = null;
-      fetchJobDetails();
-    }
+  }).observe(document, { subtree: true, childList: true 
+    
   });
 
   // ── Messages from background ──────────────
