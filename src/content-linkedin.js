@@ -13,7 +13,7 @@
   let lastPopupAt = 0;
   const POPUP_COOLDOWN_MS = 8000;
   let applyTimeout = null;
-  let applyMode = null; // 'easy' or 'external'
+  let applyMode = null;
 
   console.log('[Tally] LinkedIn script loaded ✓');
 
@@ -69,13 +69,11 @@
 
     currentJob = { company: '', role: '', url: location.href, source: 'LinkedIn' };
 
-    // First scrape from DOM immediately
     const dom = scrapeFromDOM();
     if (dom.role)    currentJob.role    = dom.role;
     if (dom.company) currentJob.company = dom.company;
     console.log('[Tally] DOM scrape:', currentJob.role, 'at', currentJob.company);
 
-    // Then try guest API as backup
     fetch(`https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${jobId}`)
       .then(r => r.text())
       .then(html => {
@@ -102,7 +100,6 @@
           if (match?.[1]?.trim()) { currentJob.company = match[1].trim(); break; }
         }
 
-        // Keep DOM values if API returned nothing
         if (!currentJob.role)    currentJob.role    = dom.role    || 'Unknown Role';
         if (!currentJob.company) currentJob.company = dom.company || 'Unknown Company';
 
@@ -125,7 +122,6 @@
     if (popupShowing || document.getElementById('tally-confirm')) return;
     popupShowing = true;
 
-    // Re-scrape from DOM at popup time in case fetch hasn't resolved yet
     if (!currentJob?.role || !currentJob?.company ||
         currentJob.role === '' || currentJob.company === '') {
       const dom = scrapeFromDOM();
@@ -150,7 +146,7 @@
     }
 
     injectStyles(`
-      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap');
+      
       #tally-confirm {
         position: fixed; top: 24px; right: 24px;
         z-index: 2147483647;
@@ -238,13 +234,17 @@
           () => {
             chrome.runtime.sendMessage({ type: 'GET_STATS' }, (stats) => {
               showYay(finalJob, stats?.today);
+              refreshFloatingPanel();
             });
           }
         );
       } else {
         chrome.runtime.sendMessage(
           { type: 'EXTERNAL_CONFIRM_RESPONSE', confirmed: true, jobData: finalJob },
-          (res) => { showYay(finalJob, res?.todayCount); }
+          (res) => {
+            showYay(finalJob, res?.todayCount);
+            refreshFloatingPanel();
+          }
         );
       }
 
@@ -306,11 +306,22 @@
 
     console.log('[Tally] Apply click detected');
 
-    // Reset any stuck state from previous session
+    // Reset any stuck state
     popupShowing = false;
     lastPopupAt = 0;
     clearTimeout(applyTimeout);
     applyTimeout = null;
+
+    // Re-scrape if currentJob is stale
+    if (!currentJob?.role || !currentJob?.company) {
+      const dom = scrapeFromDOM();
+      currentJob = {
+        role: dom.role || 'Unknown Role',
+        company: dom.company || 'Unknown Company',
+        url: location.href,
+        source: 'LinkedIn'
+      };
+    }
 
     const isEasyApply = text.includes('easy apply') || aria.includes('easy apply');
     applyMode = isEasyApply ? 'easy' : 'external';
@@ -334,8 +345,19 @@
       clearTimeout(applyTimeout);
       fetchJobDetails();
     }
-  }).observe(document, { subtree: true, childList: true 
-    
+  }).observe(document, { subtree: true, childList: true });
+
+  // ── Reinitialise when tab wakes up ────────
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      console.log('[Tally] Tab woke up — reinitialising');
+      popupShowing = false;
+      clearTimeout(applyTimeout);
+      applyTimeout = null;
+      fetchJobDetails();
+      refreshFloatingPanel();
+    }
   });
 
   // ── Messages from background ──────────────
@@ -346,10 +368,340 @@
     }
   });
 
+  // ── Floating Panel ────────────────────────
+
+  let panelOpen = false;
+
+  function createFloatingButton() {
+    if (document.getElementById('tally-fab')) return;
+
+    const style = document.createElement('style');
+    style.id = 'tally-fab-styles';
+    style.textContent = `
+      
+
+      #tally-fab {
+        position: fixed;
+        top: 72px;
+        right: 0px;
+        z-index: 2147483646;
+        font-family: 'Inter', -apple-system, sans-serif;
+      }
+
+      #tally-fab-btn {
+        background: #0a0a0a;
+        border: 1px solid rgba(255,255,255,0.15);
+        border-right: none;
+        border-radius: 12px 0 0 12px;
+        padding: 10px 14px;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        box-shadow: -4px 4px 20px rgba(0,0,0,0.4);
+        transition: all 0.2s;
+      }
+      #tally-fab-btn:hover {
+        background: #141414;
+        padding-right: 18px;
+      }
+      #tally-fab-logo {
+        font-size: 0.85rem;
+        font-weight: 900;
+        color: #fff;
+        letter-spacing: -0.03em;
+      }
+      #tally-fab-logo span { color: #a0a0a0; }
+      #tally-fab-count {
+        font-size: 1.1rem;
+        font-weight: 900;
+        color: #00e5a0;
+      }
+      #tally-fab-label {
+        font-size: 0.6rem;
+        color: #555;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      #tally-panel {
+        position: fixed;
+        top: 72px;
+        right: 0px;
+        width: 320px;
+        max-height: 520px;
+        z-index: 2147483646;
+        background: #0a0a0a;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-right: none;
+        border-radius: 16px 0 0 16px;
+        box-shadow: -8px 8px 40px rgba(0,0,0,0.7);
+        font-family: 'Inter', -apple-system, sans-serif;
+        display: none;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      #tally-panel.open { display: flex; }
+
+      #tally-panel-header {
+        padding: 16px 16px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      #tally-panel-title {
+        font-size: 1rem;
+        font-weight: 900;
+        color: #fff;
+        letter-spacing: -0.03em;
+      }
+      #tally-panel-title span { color: #a0a0a0; }
+      #tally-panel-close {
+        background: none;
+        border: none;
+        color: #555;
+        font-size: 1rem;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: 6px;
+        transition: all 0.15s;
+      }
+      #tally-panel-close:hover { background: #1a1a1a; color: #fff; }
+
+      #tally-panel-stats {
+        display: flex;
+        gap: 8px;
+        padding: 12px 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+      }
+      .tally-stat-box {
+        flex: 1;
+        background: #141414;
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 10px;
+        padding: 10px 8px;
+        text-align: center;
+      }
+      .tally-stat-num {
+        font-size: 1.4rem;
+        font-weight: 900;
+        color: #fff;
+      }
+      .tally-stat-num.green { color: #00e5a0; }
+      .tally-stat-lbl {
+        font-size: 0.6rem;
+        color: #555;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin-top: 2px;
+      }
+
+      #tally-search-wrap {
+        padding: 10px 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+      }
+      #tally-search {
+        width: 100%;
+        background: #141414;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        padding: 8px 12px;
+        color: #fff;
+        font-family: inherit;
+        font-size: 0.82rem;
+        outline: none;
+        box-sizing: border-box;
+        transition: border-color 0.15s;
+      }
+      #tally-search::placeholder { color: #444; }
+      #tally-search:focus { border-color: rgba(255,255,255,0.2); }
+
+      #tally-jobs-list {
+        overflow-y: auto;
+        flex: 1;
+        padding: 8px 0;
+      }
+      #tally-jobs-list::-webkit-scrollbar { width: 4px; }
+      #tally-jobs-list::-webkit-scrollbar-track { background: transparent; }
+      #tally-jobs-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+      .tally-job-row {
+        padding: 10px 16px;
+        border-bottom: 1px solid rgba(255,255,255,0.04);
+        transition: background 0.1s;
+      }
+      .tally-job-row:hover { background: #111; }
+      .tally-job-row:last-child { border-bottom: none; }
+      .tally-job-co {
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: #fff;
+      }
+      .tally-job-role {
+        font-size: 0.75rem;
+        color: #666;
+        margin-top: 2px;
+      }
+      .tally-job-date {
+        font-size: 0.68rem;
+        color: #444;
+        margin-top: 3px;
+      }
+      .tally-empty {
+        text-align: center;
+        color: #444;
+        font-size: 0.82rem;
+        padding: 24px 16px;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+
+    // Floating button
+    const fab = document.createElement('div');
+    fab.id = 'tally-fab';
+    fab.innerHTML = `
+      <button id="tally-fab-btn">
+        <div id="tally-fab-logo">Tal<span>ly</span></div>
+        <div id="tally-fab-count">0</div>
+        <div id="tally-fab-label">today</div>
+      </button>
+    `;
+    document.body.appendChild(fab);
+
+    // Panel
+    const panel = document.createElement('div');
+    panel.id = 'tally-panel';
+    panel.innerHTML = `
+      <div id="tally-panel-header">
+        <div id="tally-panel-title">Tal<span>ly</span></div>
+        <button id="tally-panel-close">✕</button>
+      </div>
+      <div id="tally-panel-stats">
+        <div class="tally-stat-box">
+          <div class="tally-stat-num green" id="tally-stat-today">0</div>
+          <div class="tally-stat-lbl">Today</div>
+        </div>
+        <div class="tally-stat-box">
+          <div class="tally-stat-num" id="tally-stat-week">0</div>
+          <div class="tally-stat-lbl">This Week</div>
+        </div>
+        <div class="tally-stat-box">
+          <div class="tally-stat-num" id="tally-stat-total">0</div>
+          <div class="tally-stat-lbl">Total</div>
+        </div>
+      </div>
+      <div id="tally-search-wrap">
+        <input id="tally-search" type="text" placeholder="🔍  Search company or role..." />
+      </div>
+      <div id="tally-jobs-list"></div>
+    `;
+    document.body.appendChild(panel);
+
+    // Toggle panel
+    document.getElementById('tally-fab-btn').onclick = () => {
+      panelOpen = !panelOpen;
+      const p = document.getElementById('tally-panel');
+      const f = document.getElementById('tally-fab');
+      if (panelOpen) {
+        p.classList.add('open');
+        f.style.display = 'none';
+        refreshFloatingPanel();
+      } else {
+        p.classList.remove('open');
+        f.style.display = 'block';
+      }
+    };
+
+    document.getElementById('tally-panel-close').onclick = () => {
+      panelOpen = false;
+      document.getElementById('tally-panel').classList.remove('open');
+      document.getElementById('tally-fab').style.display = 'block';
+    };
+
+    // Search
+    document.getElementById('tally-search').addEventListener('input', (e) => {
+      renderJobs(e.target.value);
+    });
+
+    refreshFloatingPanel();
+  }
+
+  let allJobs = [];
+
+  function refreshFloatingPanel() {
+    chrome.runtime.sendMessage({ type: 'GET_ALL_DATA' }, (res) => {
+      if (!res) return;
+      allJobs = res.applications || [];
+
+      const today = new Date().toDateString();
+      const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const todayCount = allJobs.filter(a => new Date(a.date).toDateString() === today).length;
+      const weekCount = allJobs.filter(a => new Date(a.date).getTime() > weekAgo).length;
+
+      // Update fab count
+      const fabCount = document.getElementById('tally-fab-count');
+      if (fabCount) fabCount.textContent = todayCount;
+
+      // Update stats
+      const statToday = document.getElementById('tally-stat-today');
+      const statWeek = document.getElementById('tally-stat-week');
+      const statTotal = document.getElementById('tally-stat-total');
+      if (statToday) statToday.textContent = todayCount;
+      if (statWeek) statWeek.textContent = weekCount;
+      if (statTotal) statTotal.textContent = allJobs.length;
+
+      // Render jobs
+      renderJobs('');
+    });
+  }
+
+  function renderJobs(query) {
+    const list = document.getElementById('tally-jobs-list');
+    if (!list) return;
+
+    const q = query.toLowerCase().trim();
+    const filtered = q
+      ? allJobs.filter(a =>
+          a.company?.toLowerCase().includes(q) ||
+          a.role?.toLowerCase().includes(q))
+      : allJobs.slice(0, 5);
+
+    if (filtered.length === 0) {
+      list.innerHTML = `<div class="tally-empty">${q ? 'No results found' : 'No applications yet'}</div>`;
+      return;
+    }
+
+    list.innerHTML = filtered.map(a => {
+      const date = new Date(a.date);
+      const today = new Date().toDateString();
+      const dateStr = date.toDateString() === today
+        ? 'Today ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      return `
+        <div class="tally-job-row">
+          <div class="tally-job-co">${esc2(a.company)}</div>
+          <div class="tally-job-role">${esc2(a.role)}</div>
+          <div class="tally-job-date">${dateStr}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function esc2(str) {
+    const d = document.createElement('div');
+    d.textContent = str || '';
+    return d.innerHTML;
+  }
+
   // ── Init ──────────────────────────────────
 
   setTimeout(() => {
     fetchJobDetails();
+    createFloatingButton();
     console.log('[Tally] Ready');
   }, 1000);
 
