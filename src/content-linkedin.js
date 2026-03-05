@@ -347,19 +347,7 @@
     }
   }).observe(document, { subtree: true, childList: true });
 
-  // ── Reinitialise when tab wakes up ────────
-
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      console.log('[Tally] Tab woke up — reinitialising');
-      popupShowing = false;
-      clearTimeout(applyTimeout);
-      applyTimeout = null;
-      fetchJobDetails();
-      refreshFloatingPanel();
-    }
-  });
-
+  
   // ── Messages from background ──────────────
 
   chrome.runtime.onMessage.addListener((message) => {
