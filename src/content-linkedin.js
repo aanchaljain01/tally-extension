@@ -629,7 +629,7 @@
       const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
       const todayCount = allJobs.filter(a => new Date(a.date).toDateString() === today).length;
       const weekCount = allJobs.filter(a => new Date(a.date).getTime() > weekAgo).length;
-
+    
       // Update fab count
       const fabCount = document.getElementById('tally-fab-count');
       if (fabCount) fabCount.textContent = todayCount;
@@ -684,7 +684,12 @@
     d.textContent = str || '';
     return d.innerHTML;
   }
-
+  document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    popupShowing = false;
+    lastPopupAt = 0;
+  }
+});
   // ── Init ──────────────────────────────────
 
   setTimeout(() => {
