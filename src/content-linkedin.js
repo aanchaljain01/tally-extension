@@ -5,7 +5,14 @@
 
 (function() {
   'use strict';
-  if (window.__tally_loaded) return;
+
+  // If already loaded, just respond to pings — don't reinitialise
+  if (window.__tally_loaded) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.type === 'PING') sendResponse({ ok: true });
+    });
+    return;
+  }
   window.__tally_loaded = true;
 
   let currentJob = null;
@@ -370,7 +377,11 @@
 
   // ── Messages from background ──────────────
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'PING') {
+      sendResponse({ ok: true });
+      return true;
+    }
     if (message.type === 'SHOW_AUTO_TOAST') {
       showYay(message.jobData, message.todayCount);
     }

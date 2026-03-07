@@ -342,5 +342,35 @@ async function handleMessage(message, sender, sendResponse) {
   }
 }
 
+// ── Keepalive — Reinject content scripts if dead ──────
+// Chrome randomly stops injecting content scripts, especially after
+// sleep/wake cycles or updates. This pings LinkedIn tabs every 20s
+// and reinjects if there's no response.
+
+async function ensureContentScripts() {
+  const tabs = await chrome.tabs.query({
+    url: ['https://www.linkedin.com/*', 'https://linkedin.com/*']
+  });
+
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    chrome.tabs.sendMessage(tab.id, { type: 'PING' }, (res) => {
+      if (chrome.runtime.lastError || !res?.ok) {
+        console.log('[Tally] Content script dead in tab', tab.id, '— reinjecting');
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['src/content-shared.js', 'src/content-linkedin.js']
+        }).catch(() => {});
+      }
+    });
+  }
+}
+
+// Ping every 20 seconds
+setInterval(ensureContentScripts, 20000);
+
+// Also ping when service worker wakes up
+ensureContentScripts();
+
 // Init badge on startup
 updateBadge();
