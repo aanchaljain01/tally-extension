@@ -299,6 +299,11 @@
     const btn = e.target.closest('button, a, [class*="artdeco-button"]');
     if (!btn) return;
 
+    // Debounce — ignore duplicate clicks on same button
+    if (btn.dataset.tallyProcessing) return;
+    btn.dataset.tallyProcessing = 'true';
+    setTimeout(() => delete btn.dataset.tallyProcessing, 5000);
+
     const text = btn.textContent?.trim().toLowerCase() || '';
     const aria = btn.getAttribute?.('aria-label')?.toLowerCase() || '';
 
@@ -326,6 +331,22 @@
     const isEasyApply = text.includes('easy apply') || aria.includes('easy apply');
     applyMode = isEasyApply ? 'easy' : 'external';
 
+    // For external apply, send message with retry in case SW is still waking up
+    if (applyMode === 'external') {
+      const jobToSend = { ...currentJob, type: 'manual' };
+      const sendWithRetry = (attempts) => {
+        chrome.runtime.sendMessage({ type: 'EXTERNAL_APPLY_INITIATED', jobData: jobToSend }, (res) => {
+          if (chrome.runtime.lastError || !res) {
+            console.log('[Tally] SW not ready, retrying...', attempts);
+            if (attempts > 0) setTimeout(() => sendWithRetry(attempts - 1), 500);
+          } else {
+            console.log('[Tally] EXTERNAL_APPLY_INITIATED sent successfully');
+          }
+        });
+      };
+      sendWithRetry(3);
+    }
+
     const thisTimeout = setTimeout(() => {
       if (applyTimeout === thisTimeout && !popupShowing) showConfirmPopup();
     }, 3000);
@@ -347,7 +368,6 @@
     }
   }).observe(document, { subtree: true, childList: true });
 
-  
   // ── Messages from background ──────────────
 
   chrome.runtime.onMessage.addListener((message) => {
@@ -629,7 +649,7 @@
       const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
       const todayCount = allJobs.filter(a => new Date(a.date).toDateString() === today).length;
       const weekCount = allJobs.filter(a => new Date(a.date).getTime() > weekAgo).length;
-    
+
       // Update fab count
       const fabCount = document.getElementById('tally-fab-count');
       if (fabCount) fabCount.textContent = todayCount;
@@ -684,12 +704,7 @@
     d.textContent = str || '';
     return d.innerHTML;
   }
-  document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    popupShowing = false;
-    lastPopupAt = 0;
-  }
-});
+
   // ── Init ──────────────────────────────────
 
   setTimeout(() => {
