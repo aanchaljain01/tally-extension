@@ -6,6 +6,15 @@
 (function() {
   'use strict';
 
+  // Check if extension context is still valid
+  // If not, the old script is stale — bail out and reset so new script can load
+  try {
+    chrome.runtime.getURL('');
+  } catch(e) {
+    window.__tally_loaded = false;
+    return;
+  }
+
   // If already loaded, just respond to pings — don't reinitialise
   if (window.__tally_loaded) {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -717,6 +726,21 @@
   }
 
   // ── Init ──────────────────────────────────
+
+  // Periodically check if extension context is still valid
+  // If invalidated (extension reloaded), reset so new script can load cleanly
+  setInterval(() => {
+    try {
+      chrome.runtime.getURL('');
+    } catch(e) {
+      console.log('[Tally] Context invalidated — resetting for fresh load');
+      window.__tally_loaded = false;
+      // Remove floating panel so new script creates it fresh
+      document.getElementById('tally-fab')?.remove();
+      document.getElementById('tally-panel')?.remove();
+      document.getElementById('tally-fab-styles')?.remove();
+    }
+  }, 5000);
 
   setTimeout(() => {
     fetchJobDetails();
