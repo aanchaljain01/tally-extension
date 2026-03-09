@@ -358,8 +358,8 @@ async function ensureContentScripts() {
       if (chrome.runtime.lastError || !res?.ok) {
         console.log('[Tally] Content script dead in tab', tab.id, '— reinjecting');
         chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['src/content-shared.js', 'src/content-linkedin.js']
+        target: { tabId: tab.id },
+        files: ['src/content-linkedin.js']
         }).catch(() => {});
       }
     });
